@@ -23,6 +23,6 @@ class ECVersion(BaseCommand):
         #     print("[ERROR] Unexpected length:", len(resp), "bytes:", " ".join(f"0x{b:02X}" for b in resp))
         #     return 2
         # Decode ASCII string, trim at first NUL if present
-        version = bytes(resp).split(b"\x00", 1)[0].decode("ascii", errors="replace")
+        version = bytes(resp).split(b"\x00", 1)[0].decode("ascii", errors="ignore")
         print(f"EC Version: {version}")
         return 0
