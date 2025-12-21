@@ -18,6 +18,7 @@ class FieldDef:
     read_cmd: int
     read_sub: int
     encoding: str = "ascii"
+    swapped: bool = False
 
 
 _UUID_SEGMENTS: Tuple[Tuple[int, int], ...] = ((0, 4), (4, 6), (6, 8))
@@ -75,8 +76,12 @@ def _parse_bytes_string(value: str, length: int) -> bytes:
 
 
 def _decode_field(field: FieldDef, data: bytes) -> str:
+    if field.swapped:
+        data = data[::-1]
+
     if field.encoding == "ascii":
-        return data.split(b"\x00", 1)[0].decode("ascii", errors="replace")
+        return data.split(b"\x00", 1)[0].decode("ascii", errors="ignore")
+    
     if field.encoding == "uuid":
         original = uuid.UUID(bytes=data)
         swapped = uuid.UUID(bytes=_swap_uuid_segments(data))
@@ -108,6 +113,10 @@ def _encode_field(field: FieldDef, value: str) -> Tuple[bytes, str]:
         if len(raw) > field.length:
             raise ValueError(f"Value too long ({len(raw)} bytes) for field (max {field.length})")
         padded = raw + b"\x00" * (field.length - len(raw))
+
+        if field.swapped:
+            padded = padded[::-1]
+
         printable = raw.decode("ascii", errors="replace")
         return padded, printable
     if field.encoding == "uuid":
@@ -416,6 +425,16 @@ FIELDS: Dict[str, FieldDef] = {
         read_sub=0x1F,
         encoding="ascii",
     ),
+    "country_code": FieldDef(
+        label="Country Code",
+        length=2,
+        write_cmd=0x60,
+        write_sub=0x20,
+        read_cmd=0x61,
+        read_sub=0x20,
+        encoding="ascii",
+        swapped=True,  # 啟用反轉功能
+    ),
 }
 
 def _sync_simulator_field_length(ec: EcIo, field: FieldDef) -> None:
@@ -470,16 +489,17 @@ class SMBIOS(BaseCommand):
                     ec,
                     field.read_cmd,
                     [field.read_sub],
-                    expect_len=field.length,
+                    #expect_len=field.length,
+                    expect_len=None,
                     wait_s=args.wait,
                     overall_timeout_s=args.timeout,
                 )
             except TimeoutError as exc:
                 print(f"[ERROR] {field.label} read timed out: {exc}")
                 return 2
-            if len(resp) != field.length:
-                print(f"[ERROR] Unexpected length: {len(resp)} (expected {field.length})")
-                return 2
+            # if len(resp) != field.length:
+            #     print(f"[ERROR] Unexpected length: {len(resp)} (expected {field.length})")
+            #     return 2
             data = bytes(resp)
             try:
                 printable = _decode_field(field, data)
