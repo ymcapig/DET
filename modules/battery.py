@@ -13,6 +13,8 @@ class Battery(BaseCommand):
         ops.add_argument("--mode", choices=["auto", "debug"], help="set battery mode")
         ops.add_argument("--charge", action="store_true", help="start charging")
         ops.add_argument("--discharge", action="store_true", help="start discharging")
+        # 新增 shipmode 參數
+        ops.add_argument("--shipmode", action="store_true", help="enter ship mode")
         ops.add_argument(
             "--get",
             choices=[
@@ -73,6 +75,12 @@ class Battery(BaseCommand):
         if args.discharge:
             txrx(ec, CTRL, [0x03, 0x01], expect_len=0, wait_s=args.wait, overall_timeout_s=args.timeout)
             print("Battery discharge: start")
+            return 0
+        # 新增 shipmode 處理邏輯
+        if args.shipmode:
+            # Cmd 0x30, SubCmd 0x04, Val 0x01 (Enable/Enter)
+            txrx(ec, CTRL, [0x04, 0x01], expect_len=0, wait_s=args.wait, overall_timeout_s=args.timeout)
+            print("Battery: enter ship mode")
             return 0
 
         # Info path
