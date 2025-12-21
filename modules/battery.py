@@ -115,7 +115,7 @@ class Battery(BaseCommand):
                 val = data[0] | (data[1] << 8)
                 print(f"{name}: {val}")
             elif kind == "ascii":
-                text = bytes(data).split(b"\x00", 1)[0].decode("ascii", errors="replace")
+                text = bytes(data).split(b"\x00", 1)[0].decode("ascii", errors="ignore")
                 print(f"{name}: {text}")
             else:
                 print(f"{name}:", " ".join(f"0x{b:02X}" for b in data))
@@ -132,7 +132,7 @@ class Battery(BaseCommand):
             return rc
         else:
             sub, expect, kind = get_map[args.get]
-            resp = txrx(ec, INFO, [sub], expect_len=expect, wait_s=args.wait, overall_timeout_s=args.timeout)
+            resp = txrx(ec, INFO, [sub], expect_len=None, wait_s=args.wait, overall_timeout_s=args.timeout)
             if len(resp) != expect:
                 print("[ERROR] Unexpected length:", len(resp), f"(expected {expect})")
                 return 2
