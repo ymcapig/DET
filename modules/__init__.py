@@ -8,6 +8,8 @@ from .battery import Battery       # noqa: F401
 from .kblight import KeyboardBacklight  # noqa: F401
 from .kbtype import KeyboardType   # noqa: F401
 from .smbios import SMBIOS       # noqa: F401
+from .thermaltest import Thermaltest # noqa: F401
+
 
 from .base import REGISTRY
 SUPPORTED_MODULES = REGISTRY
