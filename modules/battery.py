@@ -79,7 +79,7 @@ class Battery(BaseCommand):
         # 新增 shipmode 處理邏輯
         if args.shipmode:
             # Cmd 0x30, SubCmd 0x04, Val 0x01 (Enable/Enter)
-            txrx(ec, CTRL, [0x04, 0x01], expect_len=0, wait_s=args.wait, overall_timeout_s=args.timeout)
+            txrx(ec, CTRL, [0x04], expect_len=0, wait_s=args.wait, overall_timeout_s=args.timeout)
             print("Battery: enter ship mode")
             return 0
 
