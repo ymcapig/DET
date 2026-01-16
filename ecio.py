@@ -15,11 +15,7 @@ EC_DEBUG = _env_truthy("EC_DEBUG") or _env_truthy("ECIO_DEBUG")
 
 
 def set_debug(enabled: bool = True) -> None:
-    """Enable/disable verbose EC I/O logging at runtime.
-
-    Preferred control path for CLI (e.g. -v). Still honors environment
-    variables as defaults, and this call overrides them.
-    """
+    """Enable/disable verbose EC I/O logging at runtime."""
     global EC_DEBUG
     EC_DEBUG = bool(enabled)
 
@@ -87,42 +83,36 @@ class EcIo:
     def status(self):
         return self.inb(self.cmd.value)
 
-    def wait_ibf_clear(self, timeout_s=0.5, poll_s=0.02):
+    def wait_ibf_clear(self, timeout_s=0.5, poll_s=0.001):
+        """Wait for Input Buffer Full (IBF) flag to clear (Bit 1 = 0)."""
         t0 = time.perf_counter()
-        _dbg(f"WAIT_IBF_CLEAR start timeout={timeout_s*1000:.0f}ms poll={poll_s*1000:.0f}ms")
-        polls = 0
         while time.perf_counter() - t0 < timeout_s:
             if (self.status() & 0x02) == 0:
-                _dbg(f"WAIT_IBF_CLEAR ready after {(time.perf_counter()-t0)*1000:.1f} ms (polls={polls})")
                 return True
-            polls += 1
-            _dbg(f"WAIT_IBF_CLEAR sleep {poll_s*1000:.0f} ms")
             time.sleep(poll_s)
-        _dbg(f"WAIT_IBF_CLEAR timeout after {(time.perf_counter()-t0)*1000:.1f} ms (polls={polls})")
+        
+        _dbg(f"WAIT_IBF_CLEAR timeout after {(time.perf_counter()-t0)*1000:.1f} ms")
         return False
 
-    def wait_obf_set(self, timeout_s=0.5, poll_s=0.02):
+    def wait_obf_set(self, timeout_s=0.5, poll_s=0.001):
+        """Wait for Output Buffer Full (OBF) flag to set (Bit 0 = 1)"""
         t0 = time.perf_counter()
-        _dbg(f"WAIT_OBF_SET start timeout={timeout_s*1000:.0f}ms poll={poll_s*1000:.0f}ms")
-        polls = 0
         while time.perf_counter() - t0 < timeout_s:
             if (self.status() & 0x01) != 0:
-                _dbg(f"WAIT_OBF_SET ready after {(time.perf_counter()-t0)*1000:.1f} ms (polls={polls})")
                 return True
-            polls += 1
-            _dbg(f"WAIT_OBF_SET sleep {poll_s*1000:.0f} ms")
             time.sleep(poll_s)
-        _dbg(f"WAIT_OBF_SET timeout after {(time.perf_counter()-t0)*1000:.1f} ms (polls={polls})")
         return False
 
     def write_command(self, cmd):
-        #if not self.wait_ibf_clear():
-        #    raise TimeoutError("IBF not cleared before command")
+        # [FIX] IBF Check restored
+        if not self.wait_ibf_clear():
+            raise TimeoutError(f"IBF not cleared before command 0x{cmd:02X}")
         self.outb(self.cmd.value, cmd)
 
     def write_data(self, b):
-        #if not self.wait_ibf_clear():
-        #    raise TimeoutError("IBF not cleared before data")
+        # [FIX] IBF Check restored
+        if not self.wait_ibf_clear():
+            raise TimeoutError(f"IBF not cleared before data 0x{b:02X}")
         self.outb(self.dat.value, b)
 
     def read_byte(self, timeout_s=0.5):
@@ -134,13 +124,11 @@ class EcIo:
 def txrx(ec: 'EcIo', cmd: int, data: list[int], expect_len: int|None,
          wait_s: float, overall_timeout_s: float) -> list[int]:
     """Write, then drain all bytes; return only expected length.
-
-    To prevent leaving unread bytes in the EC OBF (which may hang later I/O),
-    this function keeps reading until no more data arrives within a short
-    per-read timeout, rather than stopping exactly at expect_len. If
-    expect_len is provided, the returned list is truncated to that length —
-    but any extra bytes are still consumed from the port.
+    
+    Restored IBF checks on write, but keeps the original 'drain' behavior
+    on read (doesn't stop early even if expect_len is met).
     """
+    
     cmd_port_attr = getattr(ec, "cmd", None)
     if cmd_port_attr is not None and hasattr(cmd_port_attr, "value"):
         cmd_port_repr = f"0x{int(cmd_port_attr.value) & 0xFFFF:04X}"
@@ -154,16 +142,23 @@ def txrx(ec: 'EcIo', cmd: int, data: list[int], expect_len: int|None,
         dat_port_repr = "sim"
 
     _dbg(f"WRITE CMD 0x{cmd:02X} -> port {cmd_port_repr}")
+    
+    # 1. Write Command (will wait for IBF)
     ec.write_command(cmd)
-    time.sleep(0.05)
-    _dbg(f"sleep 20ms")
+    
+    # Slight delay to let EC digest the command byte before we push args
+    time.sleep(0.05) 
+
     for i, d in enumerate(data):
         _dbg(f"WRITE DATA[{i}] 0x{d & 0xFF:02X} -> port {dat_port_repr}")
-        time.sleep(0.005)
+        # 2. Write Data (will wait for IBF)
         ec.write_data(d)
+        time.sleep(0.005)
     
-    _dbg("[Info] Waiting for EC to process command ... (0.2s)")
-    time.sleep(0.3)
+    _dbg("[Info] Waiting for EC to process command ...")
+    
+    # [OPTIONAL] Kept a small sleep here to be safe, but relies on read_byte timeout mainly.
+    time.sleep(0.2) 
 
     out: list[int] = []
     t0 = time.perf_counter()
@@ -171,15 +166,19 @@ def txrx(ec: 'EcIo', cmd: int, data: list[int], expect_len: int|None,
     timeout_exc: Optional[TimeoutError] = None
 
     while time.perf_counter() - t0 <= overall_timeout_s:
+        # [USER REQUEST]: No "break if len >= expect_len".
+        # We continue looping to drain any extra bytes or until silence (timeout).
+        
         t_read0 = time.perf_counter()
         try:
-            #b = ec.read_byte(timeout_s=READ_SLICE_TIMEOUT_S)
             b = ec.read_byte(timeout_s=wait_s)
+            
             dt_ms = (time.perf_counter() - t_read0) * 1000.0
             out.append(b)
             _dbg(f"READ wait {dt_ms:.1f} ms -> 0x{b:02X} (count={len(out)})")
-            # keep looping to drain more
+            
         except TimeoutError as exc:
+            # Silence detected (no more data from EC)
             dt_ms = (time.perf_counter() - t_read0) * 1000.0
             _dbg(f"READ wait {dt_ms:.1f} ms -> timeout (drain complete)")
             timed_out = True
@@ -189,12 +188,16 @@ def txrx(ec: 'EcIo', cmd: int, data: list[int], expect_len: int|None,
     if expect_len is not None:
         if len(out) > expect_len:
             _dbg(f"TRUNCATE response: got {len(out)} > expected {expect_len}, discarding {len(out)-expect_len} byte(s)")
-        elif len(out) < expect_len and expect_len > 0:
+        elif len(out) < expect_len:
             _dbg(f"SHORT response: got {len(out)} < expected {expect_len}")
             reason = "response timed out"
             if not timed_out:
                 reason = "response ended before expected length"
             msg = f"{reason}: received {len(out)} of {expect_len} byte(s)"
-            raise TimeoutError(msg) from timeout_exc
+            
+            if timeout_exc:
+                raise TimeoutError(msg) from timeout_exc
+            else:
+                raise TimeoutError(msg)
         return out[:expect_len]
     return out
